@@ -1,0 +1,113 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-soar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soar_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-soar}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./app/src/cases/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soar}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-soar}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-soar}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-soar_dev_password}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change-me-to-a-long-random-string}
+      EXECUTIONS_MODE: queue
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: "6379"
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://localhost:5678/}
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-UTC}
+      N8N_METRICS: "true"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    ports:
+      - "5678:5678"
+
+  n8n-worker:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    command: worker
+    depends_on:
+      - n8n
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-soar}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-soar}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-soar_dev_password}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change-me-to-a-long-random-string}
+      EXECUTIONS_MODE: queue
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: "6379"
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-UTC}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    deploy:
+      replicas: 2
+
+  app:
+    build: ./app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: postgres://${POSTGRES_USER:-soar}:${POSTGRES_PASSWORD:-soar_dev_password}@postgres:5432/${POSTGRES_DB:-soar}
+      REDIS_URL: redis://redis:6379
+      PLUGINS_DIR: /plugins
+      RULES_DIR: /rules
+      N8N_WEBHOOK_BASE: ${N8N_WEBHOOK_BASE:-http://n8n:5678/webhook}
+      DEFAULT_TENANT: ${DEFAULT_TENANT:-default}
+    volumes:
+      - ./plugins:/plugins:ro
+      - ./rules:/rules:ro
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+  redis_data:
+  n8n_data:

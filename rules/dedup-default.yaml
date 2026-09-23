@@ -1,0 +1,8 @@
+# Suppress identical alerts within 15 minutes.
+# Signature = event_type + source + target_user + host + src_ip.
+name: dedup-default
+type: dedup
+match: {}            # applies to every event
+window: 15m
+severity: info
+description: Default deduplication for identical alerts

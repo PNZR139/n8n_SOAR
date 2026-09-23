@@ -1,0 +1,11 @@
+# Fire an incident when a user has 20 failed authentications in 10 minutes.
+name: auth-brute-force
+type: threshold
+match:
+  event_type: auth.failed
+window: 10m
+group_by: [target_user]
+threshold: 20
+severity: high
+playbook: pb-identity-triage   # n8n webhook: POST <N8N_WEBHOOK_BASE>/pb-identity-triage
+description: Possible brute-force attack against a user account
