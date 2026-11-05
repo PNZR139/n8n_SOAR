@@ -1,0 +1,234 @@
+{
+  "name": "pb-identity-triage",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pb-identity-triage",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "5f0c2b7e-7d1a-4c55-9b0e-3c1f6a2d8e41"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://app:3000/cases",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  title: 'Possible brute-force on ' + ($json.body.event.target_user || 'unknown user') + ' (rule: ' + $json.body.rule + ')',\n  severity: ['low','medium','high','critical'].includes($json.body.event.severity) ? $json.body.event.severity : 'high',\n  incident_id: $json.body.incident_id,\n  n8n_execution_id: String($execution.id)\n}) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "name": "Create Case",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "a1b2c3d4-0001-4000-8000-000000000001",
+              "leftValue": "={{ ($('Webhook').first().json.body.event || {}).src_ip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has Source IP",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://app:3000/connectors/virustotal/actions/enrich_ip",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  params: { ip: $('Webhook').first().json.body.event.src_ip },\n  config: { apiKey: $env.VT_API_KEY || '' }\n}) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "name": "Enrich IP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        780,
+        200
+      ],
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the triage note from the incident payload and (optional) enrichment.\nconst hook = $('Webhook').first().json.body;\nconst ev = hook.event || {};\nconst input = $input.first().json;\n\n// Input is the VirusTotal response when the enrichment branch ran,\n// or the Create Case response ({ id }) when it was skipped.\nconst enrichedBranch = 'ok' in input || 'error' in input;\n\nlet enrichment;\nlet verdict = '';\nif (!enrichedBranch) {\n  enrichment = 'Skipped (event has no src_ip)';\n} else if (input.ok === true) {\n  const attrs = (input.data && input.data.data && input.data.data.attributes) || {};\n  const s = attrs.last_analysis_stats || {};\n  enrichment =\n    'malicious=' + (s.malicious ?? '?') +\n    ', suspicious=' + (s.suspicious ?? '?') +\n    ', harmless=' + (s.harmless ?? '?') +\n    ' | owner: ' + (attrs.as_owner || 'n/a') +\n    ' | country: ' + (attrs.country || 'n/a');\n  if ((s.malicious || 0) > 0) {\n    verdict = 'Source IP is flagged malicious by ' + s.malicious + ' VirusTotal engine(s).';\n  }\n} else {\n  const err = input.error;\n  const msg = typeof err === 'string' ? err : ((err && err.message) || JSON.stringify(err || 'unknown error'));\n  enrichment = 'Unavailable (' + msg + ')';\n}\n\nconst lines = [\n  'Automated triage by playbook pb-identity-triage',\n  'Rule: ' + hook.rule + ' | Incident: ' + hook.incident_id,\n  'Target user: ' + (ev.target_user || 'n/a'),\n  'Source IP: ' + (ev.src_ip || 'n/a'),\n  'Event source: ' + (ev.source || 'n/a') + ' | Occurred: ' + (ev.occurred_at || 'n/a'),\n  'VirusTotal: ' + enrichment,\n];\nif (verdict) lines.push(verdict);\n\nreturn [{ json: { note: lines.join('\\n') } }];\n"
+      },
+      "name": "Build Note",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://app:3000/cases/' + $('Create Case').first().json.id + '/notes' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ author: 'n8n', body: $json.note }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "name": "Add Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://app:3000/cases/' + $('Create Case').first().json.id }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'triage' }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "name": "Set Status Triage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Create Case",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Case": {
+      "main": [
+        [
+          {
+            "node": "Has Source IP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Source IP": {
+      "main": [
+        [
+          {
+            "node": "Enrich IP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich IP": {
+      "main": [
+        [
+          {
+            "node": "Build Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Note": {
+      "main": [
+        [
+          {
+            "node": "Add Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Note": {
+      "main": [
+        [
+          {
+            "node": "Set Status Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
