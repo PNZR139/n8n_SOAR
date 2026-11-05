@@ -1,0 +1,88 @@
+{
+  "name": "playbook-error-handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://app:3000/cases",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  title: 'Playbook failed: ' + $json.workflow.name,\n  severity: 'high',\n  n8n_execution_id: String($json.execution.id)\n}) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "name": "Create Failure Case",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://app:3000/cases/' + $json.id + '/notes' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  author: 'n8n',\n  body: 'Execution ' + $('Error Trigger').first().json.execution.id + ' failed at node \"' +\n        $('Error Trigger').first().json.execution.lastNodeExecuted + '\": ' +\n        (($('Error Trigger').first().json.execution.error || {}).message || 'unknown error')\n}) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "name": "Add Failure Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Create Failure Case",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Failure Case": {
+      "main": [
+        [
+          {
+            "node": "Add Failure Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
